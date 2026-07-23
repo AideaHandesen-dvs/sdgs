@@ -1,5 +1,7 @@
 # sdgs
 
+![SDGs badge demo](docs/demo.gif)
+
 A tiny display toy: an **ESP32-C3** drives a **1.28" round LCD (GC9A01A)** that renders the
 17-colour SDGs wheel, spinning, with `SDGs` in the centre.
 
