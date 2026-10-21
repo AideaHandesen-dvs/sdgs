@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDGs バッジ リモコン</title>
+<meta name="theme-color" content="#111111">
+<style>
+  /* SDGs バッジを Android の Chrome（Web Bluetooth）から操作するページ。UUID は src/main.cpp と揃える */
+  :root {
+    --bg: #f4f4f1; --card: #ffffff; --ink: #161616; --sub: #66665f; --line: #deded8;
+    --accent: #1f6feb; --accent-ink: #ffffff; --warn: #b42318; --ok: #1a7f37;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f0f10; --card: #19191b; --ink: #ececea; --sub: #9a9a94; --line: #2c2c2f;
+      --accent: #4c8dff; --accent-ink: #0b0b0c; --warn: #ff7b72; --ok: #56d364;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f0f10; --card: #19191b; --ink: #ececea; --sub: #9a9a94; --line: #2c2c2f;
+    --accent: #4c8dff; --accent-ink: #0b0b0c; --warn: #ff7b72; --ok: #56d364;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  main { max-width: 480px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: .02em; }
+  .lead { color: var(--sub); margin: 0 0 18px; font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; color: var(--sub); font-weight: 600; margin: 0 0 10px; }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 10px; padding: 10px 14px; cursor: pointer; min-height: 44px;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; width: 100%; }
+  button:disabled { opacity: .45; cursor: default; }
+  .status { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--sub); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; }
+  .dot.on { background: var(--ok); }
+  .err { color: var(--warn); font-size: 14px; margin-top: 8px; }
+  .lcd { display: block; width: min(240px, 70vw); aspect-ratio: 1; margin: 0 auto 12px; border-radius: 50%; background: #000; }
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .seg button { padding: 10px 2px; white-space: nowrap; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  input[type=text] {
+    width: 100%; font: inherit; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > input { flex: 1; min-width: 0; }
+  .hint { font-size: 13px; color: var(--sub); margin: 6px 0 0; }
+  .hint.over { color: var(--warn); }
+  label.range { display: grid; grid-template-columns: 3em 1fr 1.8em; gap: 10px; align-items: center; margin: 10px 0 6px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .swatches { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; margin-top: 8px; }
+  .swatches button { min-height: 32px; padding: 0; border-radius: 6px; border: 2px solid var(--line); }
+  .swatches button[aria-pressed="true"] { border-color: var(--ink); }
+  .swatches input[type=color] { width: 100%; height: 32px; padding: 0; border: 2px solid var(--line); border-radius: 6px; background: none; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  fieldset:disabled { opacity: .5; }
+  footer { font-size: 12px; color: var(--sub); margin-top: 20px; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SDGs バッジ リモコン</h1>
+  <p class="lead">丸い画面の輪の回し方と、真ん中の文字を変える。変えたものは本体が覚える。</p>
+
+  <section class="card">
+    <button id="connect" class="primary">バッジにつなぐ</button>
+    <div class="status"><span id="dot" class="dot"></span><span id="state">つながっていない</span></div>
+    <div id="err" class="err" hidden></div>
+    <p class="hint" id="allWrap" hidden>一覧に sdgs が出ないなら → <button id="connectAll">近くの機器を全部出して選ぶ</button></p>
+  </section>
+
+  <canvas class="lcd" id="lcd" width="240" height="240" aria-label="バッジの画面の見本"></canvas>
+
+  <fieldset id="controls" disabled>
+    <section class="card">
+      <h2>回し方</h2>
+      <div class="seg" role="group" aria-label="回し方">
+        <button data-dir="0" aria-pressed="true">時計回り</button>
+        <button data-dir="1" aria-pressed="false">反時計回り</button>
+        <button id="stop" aria-pressed="false">止める</button>
+      </div>
+      <label class="range">速さ<input id="speed" type="range" min="1" max="30" value="8"><span class="num" id="speedv">8</span></label>
+      <p class="hint">1 コマに回す角度（もともとは 8）。見本の速さはだいたい。</p>
+    </section>
+
+    <section class="card">
+      <h2>真ん中の文字</h2>
+      <div class="row">
+        <input id="label" type="text" autocomplete="off" placeholder="SDGs" maxlength="24">
+        <button id="sendLabel">送る</button>
+      </div>
+      <p class="hint" id="bytes">4 / 24 字</p>
+      <p class="hint">本体のフォントは英数字と記号だけ（日本語は出ない）。</p>
+      <label class="range">大きさ<input id="size" type="range" min="1" max="8" value="5"><span class="num" id="sizev">5</span></label>
+      <p class="hint" id="fitHint"></p>
+      <div class="swatches" id="swatches"></div>
+    </section>
+  </fieldset>
+
+  <footer>Android の Chrome で開く（iPhone の Safari は Web Bluetooth に未対応）。<a href="https://github.com/AideaHandesen-dvs/sdgs">ソース</a></footer>
+</main>
+
+<script>
+const SVC   = "5d650001-2f67-465b-9d3c-33c4607b0907";
+const SPIN  = "5d650002-2f67-465b-9d3c-33c4607b0907"; // 3 バイト：速さ（1〜30）・向き（0=時計 1=反時計）・回す（0/1）
+const LABEL = "5d650003-2f67-465b-9d3c-33c4607b0907"; // ASCII（最大 24 バイト）
+const STYLE = "5d650004-2f67-465b-9d3c-33c4607b0907"; // 書く：大きさ・色（RGB565 LE） 読む：＋実際の大きさ
+const LABEL_MAX = 24;
+// 本体の sdgs_colors と同じ（RGB565）
+const WHEEL = [0xE126, 0xD405, 0x2C4A, 0xC105, 0xEF44, 0x257D, 0xFCC0, 0xA106,
+  0xF381, 0xE14A, 0xFCA2, 0xBF04, 0x3B67, 0x1B38, 0x5D28, 0x0413, 0x1209];
+
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+let device = null, ch = {};
+let spin = { speed: 8, dir: 0, run: 1 };
+let style = { size: 5, color: 0xFFFF, fit: 5 };
+let label = "SDGs";
+
+const to565 = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return ((n >> 19 & 0x1f) << 11) | ((n >> 10 & 0x3f) << 5) | (n >> 3 & 0x1f);
+};
+const toCss = (c) => {
+  const r = (c >> 11 & 0x1f) * 255 / 31, g = (c >> 5 & 0x3f) * 255 / 63, b = (c & 0x1f) * 255 / 31;
+  return "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+};
+
+function setState(on, msg) {
+  $("dot").classList.toggle("on", on);
+  $("state").textContent = msg;
+  $("controls").disabled = !on;
+  $("connect").textContent = on ? "切る" : (device ? "つなぎ直す" : "バッジにつなぐ");
+}
+function showErr(e) {
+  const el = $("err");
+  if (!e) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = typeof e === "string" ? e : (e.message || String(e));
+}
+
+// 本体の applyLabel と同じ決め方（Adafruit GFX の標準フォントは 1 字 6×8・大きさ倍）
+function fitSize(s, size) {
+  for (let k = size; k > 1; k--) {
+    const w = s.length * 6 * k, h = 8 * k;
+    if ((w / 2) ** 2 + (h / 2) ** 2 <= 80 * 80) return k;
+  }
+  return 1;
+}
+
+// ---- 見本（本体と同じ描き方を canvas でなぞる）
+let angle = 0;
+function drawLcd() {
+  const g = $("lcd").getContext("2d");
+  g.fillStyle = "#000"; g.fillRect(0, 0, 240, 240);
+  const step = 360 / 17;
+  for (let i = 0; i < 17; i++) {
+    const a0 = (i * step + angle) * Math.PI / 180, a1 = ((i + 1) * step + angle + 1.1) * Math.PI / 180;
+    g.beginPath(); g.arc(120, 120, 120, a0, a1); g.arc(120, 120, 85, a1, a0, true); g.closePath();
+    g.fillStyle = toCss(WHEEL[i]); g.fill();
+  }
+  g.strokeStyle = "#fff"; g.lineWidth = 1;
+  g.beginPath(); g.arc(120, 120, 119, 0, 7); g.stroke();
+  g.beginPath(); g.arc(120, 120, 84, 0, 7); g.stroke();
+  const k = fitSize(label, style.size);
+  g.fillStyle = toCss(style.color);
+  g.font = `bold ${8 * k}px ui-monospace, Menlo, monospace`;
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(label, 120, 120, label.length * 6 * k);
+  if (spin.run) angle = (angle + (spin.dir ? -spin.speed : spin.speed) + 360) % 360;
+}
+setInterval(drawLcd, 1000 / 30);
+
+// ---- 表示の更新
+function renderSpin() {
+  document.querySelectorAll("[data-dir]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(spin.run && +b.dataset.dir === spin.dir)));
+  $("stop").setAttribute("aria-pressed", String(!spin.run));
+  $("speed").value = spin.speed; $("speedv").textContent = spin.speed;
+}
+function renderStyle() {
+  $("size").value = style.size; $("sizev").textContent = style.size;
+  const k = fitSize($("label").value || label, style.size);
+  $("fitHint").textContent = k < style.size ? `輪の内に収まらないので、本体は大きさ ${k} で出す。` : "";
+  document.querySelectorAll("[data-color]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(+b.dataset.color === style.color)));
+}
+function updateBytes() {
+  const n = $("label").value.length;
+  $("bytes").textContent = `${n} / ${LABEL_MAX} 字`;
+}
+// 英数字と記号だけ残す（本体のフォントに無い字は送らない）
+const asciiOnly = (s) => s.replace(/[^\x20-\x7e]/g, "").slice(0, LABEL_MAX);
+
+// ---- 色の候補：白・黒、輪の 17 色、好きな色
+[0xFFFF, 0x0000, ...WHEEL].forEach((c) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.dataset.color = c; b.style.background = toCss(c);
+  b.setAttribute("aria-label", toCss(c));
+  b.addEventListener("click", () => { style.color = c; renderStyle(); sendStyle(); });
+  $("swatches").appendChild(b);
+});
+const picker = document.createElement("input");
+picker.type = "color"; picker.value = "#ffffff"; picker.setAttribute("aria-label", "好きな色");
+picker.addEventListener("input", () => { style.color = to565(picker.value); renderStyle(); sendStyle(); });
+$("swatches").appendChild(picker);
+
+async function connect(all = false) {
+  showErr(null);
+  if (!navigator.bluetooth) {
+    showErr("このブラウザは Web Bluetooth が使えない。Android の Chrome で開いてくれ。");
+    return;
+  }
+  try {
+    if (!device) {
+      // all＝絞り込まずに全部出す（バッジが名乗っているのに絞り込みで落ちているのか、そもそも名乗っていないのかを見分ける）
+      device = await navigator.bluetooth.requestDevice(all
+        ? { acceptAllDevices: true, optionalServices: [SVC] }
+        : { filters: [{ services: [SVC] }, { name: "sdgs" }], optionalServices: [SVC] });
+      device.addEventListener("gattserverdisconnected", () => setState(false, "切れた"));
+    }
+    setState(false, "つないでいる…");
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    ch = {
+      spin: await svc.getCharacteristic(SPIN),
+      label: await svc.getCharacteristic(LABEL),
+      style: await svc.getCharacteristic(STYLE),
+    };
+    // 今の設定を読んでページに映す
+    const sp = await ch.spin.readValue();
+    spin = { speed: sp.getUint8(0), dir: sp.getUint8(1), run: sp.getUint8(2) };
+    label = dec.decode(await ch.label.readValue());
+    $("label").value = label;
+    await readStyle();
+    updateBytes(); renderSpin();
+    setState(true, `つながった（${device.name || "sdgs"}）`);
+  } catch (e) {
+    setState(false, "つながっていない");
+    $("allWrap").hidden = false;
+    if (e.name === "NotFoundError") { // 一覧を閉じた・何も選ばなかった
+      showErr("バッジを選べなかった。一覧に出てこなかったなら、本体の電源と、スマホの位置情報・Bluetooth がオンかを見てくれ。");
+      return;
+    }
+    if (device && e.name !== "NetworkError") device = null; // 選んだ機器がバッジじゃなかった等＝次は選び直す
+    showErr(`${e.name}: ${e.message}`);
+  }
+}
+async function readStyle() {
+  const s = await ch.style.readValue();
+  style = { size: s.getUint8(0), color: s.getUint8(1) | (s.getUint8(2) << 8), fit: s.byteLength >= 4 ? s.getUint8(3) : s.getUint8(0) };
+  picker.value = toCss(style.color);
+  renderStyle();
+}
+
+// 書き込みは一本ずつ（GATT は同時に書くと失敗する）
+let queue = Promise.resolve();
+function write(fn) {
+  queue = queue.then(fn).catch(showErr);
+  return queue;
+}
+const sendSpin = () => write(() => ch.spin.writeValueWithResponse(Uint8Array.of(spin.speed, spin.dir, spin.run)));
+let styleTimer;
+function sendStyle() {
+  clearTimeout(styleTimer); // つまみ・色を動かしている間は送り過ぎない
+  styleTimer = setTimeout(() => write(() =>
+    ch.style.writeValueWithResponse(Uint8Array.of(style.size, style.color & 0xff, style.color >> 8))), 150);
+}
+
+$("connect").addEventListener("click", () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  else connect();
+});
+$("connectAll").addEventListener("click", () => { device = null; connect(true); });
+document.querySelectorAll("[data-dir]").forEach((b) => b.addEventListener("click", () => {
+  spin.dir = +b.dataset.dir; spin.run = 1;
+  renderSpin(); sendSpin();
+}));
+$("stop").addEventListener("click", () => { spin.run = 0; renderSpin(); sendSpin(); });
+let speedTimer;
+$("speed").addEventListener("input", () => {
+  spin.speed = +$("speed").value; $("speedv").textContent = spin.speed;
+  clearTimeout(speedTimer);
+  speedTimer = setTimeout(sendSpin, 150);
+});
+$("size").addEventListener("input", () => { style.size = +$("size").value; renderStyle(); sendStyle(); });
+$("label").addEventListener("input", () => {
+  const t = asciiOnly($("label").value);
+  if (t !== $("label").value) $("label").value = t;
+  updateBytes(); renderStyle();
+});
+function sendLabel() {
+  const t = asciiOnly($("label").value);
+  label = t;
+  write(async () => {
+    await ch.label.writeValueWithResponse(enc.encode(t));
+    await new Promise((r) => setTimeout(r, 150)); // 本体の loop が大きさを決め直すのを待つ
+    await readStyle();
+  });
+}
+$("sendLabel").addEventListener("click", sendLabel);
+$("label").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) sendLabel(); });
+
+$("label").value = label;
+updateBytes(); renderSpin(); renderStyle();
+</script>
+</body>
+</html>
